@@ -1,0 +1,7 @@
+{
+  "manifest_version": 3,
+  "name": "Retry-Maniac",
+  "permissions": ["downloads", "storage", "notifications"],
+  "background": { "service_worker": "sw.js" },
+  "action": { "default_popup": "popup.html" }
+}
