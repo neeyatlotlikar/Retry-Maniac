@@ -1,7 +1,18 @@
 {
   "manifest_version": 3,
-  "name": "Retry-Maniac",
-  "permissions": ["downloads", "storage", "notifications"],
-  "background": { "service_worker": "sw.js" },
-  "action": { "default_popup": "popup.html" }
+  "name": "Retry Maniac: Auto Resume Download",
+  "version": "0.1",
+  "description": "Automatically resumes interrupted Chrome downloads. Retries a limited number of times.",
+  "permissions": [
+    "downloads"
+  ],
+  "background": {
+    "service_worker": "background/sw.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html"
+  },
+  "icons": {
+    "128": "assets/icon128.png"
+  }
 }
