@@ -107,4 +107,4 @@ For questions or suggestions, open an issue or contact the maintainer.
 
 ---
 
-*Enjoy hassle-free downloads with Auto Resume Downloads!*
+*Enjoy hassle-free downloads with Retry Maniac: Auto Resume Downloads!*
