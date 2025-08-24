@@ -5,7 +5,8 @@
   "description": "Automatically resumes interrupted Chrome downloads. Retries a limited number of times.",
   "permissions": [
     "downloads",
-    "storage"
+    "storage",
+    "notifications"
   ],
   "background": {
     "service_worker": "background/sw.js"

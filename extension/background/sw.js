@@ -43,19 +43,79 @@ async function setRetryCount(downloadId, count) {
     await setStorage("retryCounts", data);
 }
 
+// ----- Notification Ids -----
+
+async function getNotificationId(downloadId) {
+    const data = await getStorage("notificationIds");
+    return data[downloadId] || 0;
+}
+
+async function setNotificationId(downloadId, count) {
+    const data = await getStorage("notificationIds");
+    data[downloadId] = count;
+    await setStorage("notificationIds", data);
+}
+
 // ----- Cleanup -----
 
 async function cleanup(downloadId) {
     const resumes = await getStorage("resumeAttempts");
     const retries = await getStorage("retryCounts");
+    const notificationIds = await getStorage("notificationIds");
 
     delete resumes[downloadId];
     delete retries[downloadId];
+    delete notificationIds[downloadId];
 
     await setStorage("resumeAttempts", resumes);
     await setStorage("retryCounts", retries);
+    await setStorage("notificationIds", notificationIds);
 
     console.log(`Cleaned up state for download ID: ${downloadId}`);
+}
+
+
+// -------- Notification Helpers -------- //
+
+/**
+ * Create or update a progressive notification for ongoing download recovery.
+ */
+async function updateDownloadNotification(downloadId, title, message, isFinal = false) {
+    let notifId = await getNotificationId(downloadId);
+
+    if (!notifId) {
+        notifId = `download_${downloadId}_${Date.now()}`;
+        await setNotificationId(downloadId, notifId);
+    }
+
+    chrome.notifications.update(notifId, {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("assets/icon128.png"),
+        title,
+        message,
+        requireInteraction: isFinal  // keep final notifications visible
+    }, wasUpdated => {
+        if (!wasUpdated) {
+            chrome.notifications.create(notifId, {
+                type: "basic",
+                iconUrl: chrome.runtime.getURL("assets/icon128.png"),
+                title,
+                message,
+                requireInteraction: isFinal
+            });
+        }
+    });
+
+    if (isFinal) {
+        // Auto-clear after a delay for final notifications
+        setTimeout(async () => {
+            chrome.notifications.clear(notifId);
+            // Clear notification ID
+            const notificationIds = await getStorage("notificationIds");
+            delete notificationIds[downloadId];
+            await setStorage("notificationIds", notificationIds);
+        }, 8000);
+    }
 }
 
 
@@ -93,6 +153,13 @@ async function retryDownload(download) {
     if (retries >= MAX_RETRIES || !download.url) {
         console.error(`Max retries reached for ${download.filename}`);
         await cleanup(download.id);
+
+        await updateDownloadNotification(
+            download.id,
+            "Download Failed",
+            `Max retries reached for ${download.filename}`,
+            true
+        );
         return;
     }
 
@@ -114,11 +181,17 @@ async function retryDownload(download) {
             console.log(
                 `Retry #${newRetryCount} started for ${download.filename}, new ID: ${newId}`
             );
+
+            await updateDownloadNotification(
+                newId,
+                "Download Retried",
+                `Retry ${newRetryCount} of ${MAX_RETRIES} for ${download.filename}`
+            );
         } else {
             // Retry creation failed — exponential backoff
             console.error(`Failed to create retry for ${download.filename}: ${chrome.runtime.lastError?.message}`);
             const delay = Math.min(1000 * (2 ** retries), 30000);
-            setTimeout(() => retryDownload(download), delay);
+            setTimeout(async () => await retryDownload(download), delay);
         }
     });
 }
@@ -145,9 +218,21 @@ async function attemptResumeDownload(download) {
     try {
         await chromeDownloadsResumeAsync(download.id);
         console.log(`Resumed ${download.filename} (ID: ${download.id}) [Attempt ${attempts}]`);
+
+        await updateDownloadNotification(
+            download.id,
+            "Download Resume",
+            `Resume attempt ${attempts} of ${MAX_RESUME_ATTEMPTS} successful for ${download.filename}`
+        );
     } catch (err) {
         console.error(
             `Resume attempt #${attempts} failed for ${download.filename}: ${err.message}`
+        );
+
+        await updateDownloadNotification(
+            download.id,
+            "Download Interrupted",
+            `Resume attempt ${attempts} of ${MAX_RESUME_ATTEMPTS} failed for ${download.filename}`
         );
 
         if (attempts < MAX_RESUME_ATTEMPTS) {
@@ -171,6 +256,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
     if (delta.error?.current === "USER_CANCELED" || delta.error?.current === "canceled") {
         console.log(`Download canceled by user: ${delta.id}`);
         await cleanup(delta.id);
+        await updateDownloadNotification(delta.id, "Download Cancelled", "The download was canceled", true);
         return;
     }
 
@@ -181,7 +267,11 @@ chrome.downloads.onChanged.addListener(async (delta) => {
         console.log(`Download interrupted: ${download.filename} ${download.id}`);
         await attemptResumeDownload(download);
 
-    } else if (["complete", "cancelled"].includes(delta.state?.current) || delta.exists === false) {
+    } else if (delta.state?.current === "complete") {
         await cleanup(delta.id);
+        await updateDownloadNotification(delta.id, "Download Complete", "File has been successfully downloaded", true);
+    } else if (delta.state?.current === "cancelled" || delta.exists === false) {
+        await cleanup(delta.id);
+        await updateDownloadNotification(delta.id, "Download Cancelled", "The download was canceled", true);
     }
 });

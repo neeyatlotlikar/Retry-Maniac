@@ -9,9 +9,11 @@
 - Automatically resumes Chrome downloads that get interrupted due to network issues or server speed fluctuations.
 - Retries downloads that fail to resume, up to a configurable maximum retry count.
 - Performs network reachability checks before attempting to resume, waiting patiently for the connection to return if offline.
+- Persistent retry/resume counts using `chrome.storage.local` for robust state tracking.
 - Cleans up retry state when downloads complete, cancel, or are removed.
 - Uses Chrome’s native downloads API — no external dependencies or native apps required.
 - Minimal, non-interactive popup with clear usage description in dark theme.
+- Browser notifications for download status tracking.
 - Fully respects Chrome’s built-in download controls like pause, resume, and cancel.
 
 ---
@@ -49,6 +51,7 @@ Modify the following constants in `background.js` to customize behavior:
 ```js
 const MAX_RESUME_ATTEMPTS = 5; // Maximum resume attempts per download
 const MAX_RETRIES = 3; // Maximum full retry attempts if resume fails
+const NETWORK_PROBE_INTERVAL = 5000; // Wait time before next network check
 ```
 
 ---
@@ -85,21 +88,15 @@ const MAX_RETRIES = 3; // Maximum full retry attempts if resume fails
 
 - Resuming interrupted downloads depends on server support for HTTP range requests.
 
-- In-memory retry counters reset when the service worker unloads; persistent state is not implemented (could be added with `chrome.storage`).
-
 - Does not modify or override Chrome’s native download UI or controls.
 
 ---
 
 ## Future Enhancements
 
-- Add persistent retry/resume counts using `chrome.storage.local` for more robust state tracking.
-
 - Support user-configurable settings via the popup UI.
 
 - Improve network reachability checks using content script probes or custom CORS-enabled endpoints.
-
-- Add notifications or visual indicators for retry status.
 
 ---
 
