@@ -2,9 +2,64 @@ const MAX_RESUME_ATTEMPTS = 5;
 const MAX_RETRIES = 3;
 const NETWORK_PROBE_INTERVAL = 5000;
 
-// Track attempts: { downloadId: count }
-const resumeAttempts = new Map();
-const retryCounts = new Map();
+
+// -------- Helpers for persistent state -------- //
+
+async function getStorage(key) {
+    return new Promise(resolve => {
+        chrome.storage.local.get(key, result => resolve(result[key] || {}));
+    });
+}
+
+async function setStorage(key, value) {
+    return new Promise(resolve => {
+        chrome.storage.local.set({ [key]: value }, resolve);
+    });
+}
+
+// ----- Resume Attempts -----
+
+async function getResumeAttempts(downloadId) {
+    const data = await getStorage("resumeAttempts");
+    return data[downloadId] || 0;
+}
+
+async function setResumeAttempts(downloadId, count) {
+    const data = await getStorage("resumeAttempts");
+    data[downloadId] = count;
+    await setStorage("resumeAttempts", data);
+}
+
+// ----- Retry Counts -----
+
+async function getRetryCount(downloadId) {
+    const data = await getStorage("retryCounts");
+    return data[downloadId] || 0;
+}
+
+async function setRetryCount(downloadId, count) {
+    const data = await getStorage("retryCounts");
+    data[downloadId] = count;
+    await setStorage("retryCounts", data);
+}
+
+// ----- Cleanup -----
+
+async function cleanup(downloadId) {
+    const resumes = await getStorage("resumeAttempts");
+    const retries = await getStorage("retryCounts");
+
+    delete resumes[downloadId];
+    delete retries[downloadId];
+
+    await setStorage("resumeAttempts", resumes);
+    await setStorage("retryCounts", retries);
+
+    console.log(`Cleaned up state for download ID: ${downloadId}`);
+}
+
+
+// -------- Network Helpers -------- //
 
 async function isNetworkReachable() {
     return navigator.onLine;
@@ -18,6 +73,9 @@ async function waitForNetwork() {
     console.log("Network back online");
 }
 
+
+// -------- Chrome Download Helpers -------- //
+
 function chromeDownloadsResumeAsync(downloadId) {
     return new Promise((resolve, reject) => {
         chrome.downloads.resume(downloadId, () => {
@@ -26,14 +84,15 @@ function chromeDownloadsResumeAsync(downloadId) {
     });
 }
 
+
 /**
  * Attempt to retry by creating a new download, and reset resume count.
  */
 async function retryDownload(download) {
-    const retries = retryCounts.get(download.id) || 0;
+    const retries = await getRetryCount(download.id);
     if (retries >= MAX_RETRIES || !download.url) {
         console.error(`Max retries reached for ${download.filename}`);
-        cleanup(download.id);
+        await cleanup(download.id);
         return;
     }
 
@@ -43,26 +102,27 @@ async function retryDownload(download) {
         url: download.url,
         filename: download.filename,
         conflictAction: "overwrite"
-    }, newId => {
+    }, async newId => {
         if (newId) {
-            // Transfer retry count to new download id
-            retryCounts.set(newId, newRetryCount);
-            retryCounts.delete(download.id);
+            // Update retry count for new download
+            await setRetryCount(newId, newRetryCount);
+            await setResumeAttempts(newId, 0);
 
-            // Reset resume attempt count for the fresh download
-            resumeAttempts.set(newId, 0);
+            // Remove old counts
+            await cleanup(download.id);
 
             console.log(
                 `Retry #${newRetryCount} started for ${download.filename}, new ID: ${newId}`
             );
         } else {
-            // Retry creation failed — apply exponential backoff
+            // Retry creation failed — exponential backoff
             console.error(`Failed to create retry for ${download.filename}: ${chrome.runtime.lastError?.message}`);
             const delay = Math.min(1000 * (2 ** retries), 30000);
             setTimeout(() => retryDownload(download), delay);
         }
     });
 }
+
 
 /**
  * Attempt to resume a download if possible, otherwise escalate to retry.
@@ -73,8 +133,8 @@ async function attemptResumeDownload(download) {
         await waitForNetwork();
     }
 
-    const attempts = (resumeAttempts.get(download.id) || 0) + 1;
-    resumeAttempts.set(download.id, attempts);
+    let attempts = (await getResumeAttempts(download.id)) + 1;
+    await setResumeAttempts(download.id, attempts);
 
     if (attempts > MAX_RESUME_ATTEMPTS) {
         console.warn(`Max resume attempts reached for ${download.filename}`);
@@ -89,7 +149,7 @@ async function attemptResumeDownload(download) {
         console.error(
             `Resume attempt #${attempts} failed for ${download.filename}: ${err.message}`
         );
-        // Wait for network and try again unless we've already exhausted
+
         if (attempts < MAX_RESUME_ATTEMPTS) {
             await waitForNetwork();
             await attemptResumeDownload(download);
@@ -100,14 +160,8 @@ async function attemptResumeDownload(download) {
     }
 }
 
-/**
- * Cleanup tracking maps after completion/cancelation/failure
- */
-function cleanup(downloadId) {
-    resumeAttempts.delete(downloadId);
-    retryCounts.delete(downloadId);
-    console.log(`Cleaned up state for download ID: ${downloadId}`);
-}
+
+// -------- Event Listener -------- //
 
 chrome.downloads.onChanged.addListener(async (delta) => {
     if (!("state" in delta) && !("error" in delta)) return;
@@ -122,6 +176,6 @@ chrome.downloads.onChanged.addListener(async (delta) => {
         await attemptResumeDownload(download);
 
     } else if (["complete", "cancelled"].includes(delta.state?.current) || delta.exists === false) {
-        cleanup(delta.id);
+        await cleanup(delta.id);
     }
 });
