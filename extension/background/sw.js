@@ -168,11 +168,17 @@ chrome.downloads.onChanged.addListener(async (delta) => {
 
     console.log(`Delta: state=${delta.state?.current}, error=${delta.error?.current}`);
 
+    if (delta.error?.current === "USER_CANCELED" || delta.error?.current === "canceled") {
+        console.log(`Download canceled by user: ${delta.id}`);
+        await cleanup(delta.id);
+        return;
+    }
+
     if (delta.state?.current === "interrupted" || delta.error?.current === "NETWORK_FAILED") {
         const [download] = await chrome.downloads.search({ id: delta.id });
         if (!download) return;
 
-        console.log(`Download interrupted: ${download.filename}`);
+        console.log(`Download interrupted: ${download.filename} ${download.id}`);
         await attemptResumeDownload(download);
 
     } else if (["complete", "cancelled"].includes(delta.state?.current) || delta.exists === false) {
