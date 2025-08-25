@@ -277,7 +277,9 @@ async function retryDownload(download) {
                 setTimeout(async () => await retryDownload(download), delay);
             }
         } catch (err) {
-            console.error(`Error during retry for ${download.filename}: ${err}`);
+            console.error(
+                `Error during retry for ${download.filename}: ${err} - ${chrome.runtime.lastError?.message}`
+            );
         }
     });
 }
@@ -334,27 +336,36 @@ async function attemptResumeDownload(download) {
 chrome.downloads.onChanged.addListener(async (delta) => {
     if (!("state" in delta) && !("error" in delta)) return;
 
-    console.log(`Delta: state=${delta.state?.current}, error=${delta.error?.current}`);
+    console.log(`Delta: id=${delta.id} state=${delta.state?.current}, error=${delta.error?.current}`);
+
+    const [download] = await chrome.downloads.search({ id: delta.id });
+    if (!download) { console.warn(`Download not found: id=${delta.id}`); return; }
+
+    // retrieves the filename from the download path
+    const filename = download.filename.split(/[\\/]/).pop();
 
     if (delta.error?.current === "USER_CANCELED" || delta.error?.current === "canceled") {
-        console.log(`Download canceled by user: ${delta.id}`);
+        console.log(`Download canceled by user: ${download.filename} (ID: ${download.id})`);
         await cleanup(delta.id);
-        await updateDownloadNotification(delta.id, "Download Canceled", "The download was canceled", true);
-        return;
-    }
-
-    if (delta.state?.current === "interrupted" || delta.error?.current === "NETWORK_FAILED") {
-        const [download] = await chrome.downloads.search({ id: delta.id });
-        if (!download) return;
-
-        console.log(`Download interrupted: ${download.filename} ${download.id}`);
-        await attemptResumeDownload(download);
-
+        await updateDownloadNotification(
+            delta.id,
+            "Download Canceled",
+            `The download ${filename} was canceled`,
+            true
+        );
     } else if (delta.state?.current === "complete") {
+        console.log(`Download complete: ${download.filename} (ID: ${download.id})`);
         await cleanup(delta.id);
-        await updateDownloadNotification(delta.id, "Download Complete", "File has been successfully downloaded", true);
-    } else if (delta.state?.current === "cancelled" || delta.exists === false) {
-        await cleanup(delta.id);
-        await updateDownloadNotification(delta.id, "Download Cancelled", "The download was canceled", true);
+        await updateDownloadNotification(
+            delta.id,
+            "Download Complete",
+            `File ${filename} has been successfully downloaded`,
+            true
+        );
+    } else if (delta.state?.current === "interrupted" || delta.error?.current === "NETWORK_FAILED") {
+        console.log(`Download interrupted: ${download.filename} (ID: ${download.id})`);
+        await attemptResumeDownload(download);
+    } else {
+        console.warn(`Unhandled download state: ${download.filename} (ID: ${download.id})`);
     }
 });
