@@ -283,19 +283,12 @@ async function retryDownload(download) {
 }
 
 
-
 /**
  * Attempt to resume a download that was interrupted.
- *
- * If the network is unreachable, this will wait until it is reachable again.
- * It will then attempt to resume the download, incrementing the resume count.
- * If the resume count exceeds the maximum allowed, it will retry the download.
- * If the resume attempt fails, it will wait until the network is reachable again
- * and retry the resume. If the retry count exceeds the maximum allowed, it will
- * cancel the download.
- *
- * @param {Object} download The download object as returned by chrome.downloads.search.
- * @return {Promise<void>} Resolves when the download has been resumed, retried, or cancelled.
+ * Waits for the network to be reachable before retrying.
+ * Retries up to MAX_RESUME_ATTEMPTS times on resume fails
+ * before escalating to retryDownload.
+ * @param {Object} download The download object to resume.
  */
 async function attemptResumeDownload(download) {
     if (!(await isNetworkReachable())) {
@@ -303,27 +296,21 @@ async function attemptResumeDownload(download) {
         await waitForNetwork();
     }
 
-    let attempts = (await getResumeAttempts(download.id)) + 1;
-    await setResumeAttempts(download.id, attempts);
-
-    if (attempts > MAX_RESUME_ATTEMPTS) {
-        console.warn(`Max resume attempts reached for ${download.filename}`);
-        await retryDownload(download);
-        return;
-    }
-
     try {
         await chromeDownloadsResumeAsync(download.id);
-        console.log(`Resumed ${download.filename} (ID: ${download.id}) [Attempt ${attempts}]`);
+        console.log(`Resumed ${download.filename} (ID: ${download.id})`);
 
         await updateDownloadNotification(
             download.id,
             "Download Resume",
-            `Resume attempt ${attempts} of ${MAX_RESUME_ATTEMPTS} successful for ${download.filename}`
+            `Resume attempt successful for ${download.filename}`
         );
     } catch (err) {
+        let attempts = (await getResumeAttempts(download.id)) + 1;
+        await setResumeAttempts(download.id, attempts);
+
         console.error(
-            `Resume attempt #${attempts} failed for ${download.filename}: ${err.message}`
+            `Resume attempt #${attempts} of ${MAX_RESUME_ATTEMPTS} failed for ${download.filename}: ${err.message}`
         );
 
         await updateDownloadNotification(
@@ -333,7 +320,6 @@ async function attemptResumeDownload(download) {
         );
 
         if (attempts < MAX_RESUME_ATTEMPTS) {
-            await waitForNetwork();
             await attemptResumeDownload(download);
         } else {
             console.warn(`Exhausted resume attempts for ${download.filename}, escalating to retry`);
